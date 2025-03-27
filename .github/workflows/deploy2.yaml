@@ -3,11 +3,11 @@ name: Deploy to AWS EC2
 on:
   push:
     branches:
-      - main  # This triggers the workflow on push to main branch
+      - main  # Trigger workflow on push to the main branch
 
 jobs:
   deploy:
-    runs-on: self-hosted  # Using your EC2 as a self-hosted runner
+    runs-on: self-hosted  # Running on EC2 self-hosted runner
 
     steps:
     - name: Checkout Code
@@ -16,7 +16,7 @@ jobs:
     - name: Set up Node.js
       uses: actions/setup-node@v3
       with:
-        node-version: '14'
+        node-version: '18'  # ✅ Use Node.js 18+
 
     - name: Install Dependencies
       run: npm install
@@ -24,24 +24,35 @@ jobs:
     - name: Run Unit Tests
       run: npm test
 
-    - name: Run Integration Tests
-      run: npm run test:integration
+    - name: Run Integration Tests (Before Deployment)
+      run: npm run test:integration || true  # Allow failure before deployment
+
+    - name: Stop Any Process Using Port 8080
+      run: |
+        sudo fuser -k 8080/tcp || true
+
+    - name: Stop and Remove Old Containers
+      run: |
+        docker stop $(docker ps -q --filter "name=my-html-container") || true
+        docker rm $(docker ps -aq --filter "name=my-html-container") || true
+
+    - name: Restart Docker (If Necessary)
+      run: sudo systemctl restart docker || true
 
     - name: Build Docker Image
       run: docker build -t my-html-app .
 
-    - name: Stop and Remove Old Container
-      run: |
-        docker stop my-html-container || true
-        docker rm my-html-container || true
-
-    - name: Run New Container
-      run: docker run -d -p 8080:80 --name my-html-container my-html-app
+    - name: Run New Container with Correct Volume Mapping
+      run: docker run -d -p 8080:80 --name my-html-container -v $(pwd)/html/index.html:/usr/share/nginx/html/index.html my-html-app
 
     - name: Wait for Container to Initialize
       run: sleep 15
 
-    - name: Check Running Containers
-      run: |
-        docker ps -a
-        docker logs my-html-container || true
+    - name: Verify Running Containers
+      run: docker ps -a
+
+    - name: Verify Nginx Response Before Running Tests
+      run: curl -v http://localhost:8080 || exit 1
+
+    - name: Run Final Integration Tests
+      run: npm run test:integration
